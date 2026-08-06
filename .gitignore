@@ -1,0 +1,16 @@
+# Secrets — JANGAN pernah commit
+.env
+*.env
+!*.env.example
+
+# Akun (berisi private keys) — JANGAN pernah commit
+accounts/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS
+.DS_Store
