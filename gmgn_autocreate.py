@@ -154,8 +154,20 @@ def http_post(url, payload, headers=None):
 
 
 # ---------------------------------------------------------------- captcha
-def solve_recaptcha(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
+def solve_recaptcha(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", retries=3):
     """Solve reCAPTCHA v2 checkbox via 2captcha. Returns token or None."""
+    for attempt in range(1, retries + 1):
+        if attempt > 1:
+            print(f"  Retry captcha ({attempt}/{retries})...")
+            time.sleep(3)
+        token = _solve_recaptcha_once(sitekey, action, page_url)
+        if token:
+            return token
+        print(f"  Captcha gagal (percobaan {attempt}/{retries})")
+    return None
+
+
+def _solve_recaptcha_once(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
     key = load_captcha_key()
     if not key:
         print("  ERROR: 2CAPTCHA key tidak ditemukan. Isi .env dulu (lihat .env.example).")
