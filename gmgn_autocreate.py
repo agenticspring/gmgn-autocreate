@@ -84,15 +84,16 @@ def load_env():
         with open(hermes_env) as fh:
             for line in fh:
                 line = line.strip()
-                if line.startswith("TWOCAPTCHA_API_KEY") and "=" in line:
+                if line and "=" in line:
                     k = line.split("=", 1)[0].strip()
                     v = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    env.setdefault(k, v)
+                    if k.startswith("TWOCAPTCHA_API_KEY") or k.startswith("CAPSOLVER_API_KEY"):
+                        env.setdefault(k, v)
     return env
 
 
-def load_captcha_key():
-    """Cari 2captcha key dengan balance positif (otomatis pilih yang ada saldo)."""
+def load_captcha_keys():
+    """Semua 2captcha key urut balance terbesar (yang positif dulu)."""
     env = load_env()
     keys = []
     for k in sorted(env.keys()):
@@ -101,6 +102,7 @@ def load_captcha_key():
     keys += [os.environ.get("TWOCAPTCHA_API_KEY", "")]
 
     import subprocess
+    with_balance = []
     for key in keys:
         if not key:
             continue
@@ -111,14 +113,24 @@ def load_captcha_key():
             )
             bal = out.stdout.strip()
             try:
-                if float(bal) > 0:
-                    print(f"  Menggunakan 2captcha key {key[:12]}... (saldo ${bal})")
-                    return key
+                bal_f = float(bal)
+                if bal_f > 0:
+                    with_balance.append((bal_f, key))
             except ValueError:
                 pass
         except Exception:
             pass
-    return keys[0] if keys else ""
+    with_balance.sort(reverse=True)  # balance terbesar dulu
+    # dedupe (beberapa .env var bisa pegang key yang sama)
+    seen = set()
+    unique = []
+    for _, k in with_balance:
+        if k not in seen:
+            seen.add(k)
+            unique.append(k)
+    if unique:
+        print(f"  Key 2captcha tersedia: {[k[:10] for k in unique]}")
+    return unique
 
 
 # ---------------------------------------------------------------- http
@@ -179,15 +191,29 @@ def _solve_recaptcha_once(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
 
 
 def _solve_2captcha(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wait=120):
-    key = load_captcha_key()
-    if not key:
+    """Coba SEMUA 2captcha key (urutan balance terbesar) sampai ada yang sukses."""
+    keys = load_captcha_keys()
+    if not keys:
+        print("  2captcha key tidak ditemukan")
         return None
+    for key in keys:
+        print(f"  Coba 2captcha key {key[:12]}...")
+        token = _solve_2captcha_with_key(key, sitekey, action, page_url, max_wait)
+        if token:
+            return token
+        print(f"  Key {key[:12]}... gagal — coba key lain")
+    return None
+
+
+def _solve_2captcha_with_key(key, sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wait=120):
     params = {
         "key": key,
         "method": "userrecaptcha",
         "googlekey": sitekey,
         "pageurl": page_url,
         "json": 1,
+        # CATATAN: GMGN pakai reCAPTCHA v2 checkbox biasa (bukan enterprise).
+        # Jangan tambahkan enterprise=1 — justru bikin workers gagal solve.
     }
     if action:
         params["action"] = action
@@ -223,9 +249,10 @@ def _solve_capsolver(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wa
         print("  Capsolver key tidak ada di .env — skip")
         return None
 
-    # pilih key dengan balance > 0
+    # pilih key dengan balance TERBESAR (> 0)
     import subprocess
     client_key = None
+    best_balance = 0
     for k in keys:
         try:
             out = subprocess.run(["curl", "-s", "--max-time", "8",
@@ -234,13 +261,15 @@ def _solve_capsolver(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wa
                 "-d", json.dumps({"clientKey": k})],
                 capture_output=True, text=True, timeout=12)
             d = json.loads(out.stdout)
-            if d.get("balance", 0) > 0:
+            bal = d.get("balance", 0) or 0
+            if bal > best_balance:
+                best_balance = bal
                 client_key = k
-                print(f"  Capsolver key {k[:12]}... (balance ${d['balance']})")
-                break
         except Exception:
             continue
-    if not client_key:
+    if client_key:
+        print(f"  Capsolver key {client_key[:12]}... (balance ${best_balance})")
+    else:
         print("  Tidak ada Capsolver key dengan saldo — skip")
         return None
 
