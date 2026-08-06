@@ -168,9 +168,19 @@ def solve_recaptcha(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", retries
 
 
 def _solve_recaptcha_once(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
+    """Coba 2captcha dulu, kalau gagal/lambat fallback ke Capsolver."""
+    # 1. coba 2captcha (maks 40s tunggu, cepat fail kalau error)
+    token = _solve_2captcha(sitekey, action, page_url, max_wait=60)
+    if token:
+        return token
+    # 2. fallback capsolver
+    print("  Fallback ke Capsolver...")
+    return _solve_capsolver(sitekey, action, page_url)
+
+
+def _solve_2captcha(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wait=120):
     key = load_captcha_key()
     if not key:
-        print("  ERROR: 2CAPTCHA key tidak ditemukan. Isi .env dulu (lihat .env.example).")
         return None
     params = {
         "key": key,
@@ -185,10 +195,10 @@ def _solve_recaptcha_once(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
         with urllib.request.urlopen(f"{TWOCAPTCHA_URL}/in.php?" + urllib.parse.urlencode(params), timeout=30) as r:
             resp = json.loads(r.read().decode())
         if resp.get("status") != 1:
-            print("  Captcha error:", resp)
+            print("  2captcha error:", resp)
             return None
         task_id = resp["request"]
-        deadline = time.time() + CAPTCHA_TIMEOUT
+        deadline = time.time() + max_wait
         while time.time() < deadline:
             time.sleep(5)
             with urllib.request.urlopen(f"{TWOCAPTCHA_URL}/res.php?key={key}&action=get&id={task_id}&json=1", timeout=30) as r:
@@ -196,12 +206,75 @@ def _solve_recaptcha_once(sitekey, action=None, page_url=f"{GMGN}/?chain=sol"):
             if resp.get("status") == 1:
                 return resp["request"]
             if "CAPCHA_NOT_READY" not in str(resp.get("request", "")):
-                print("  Captcha error:", resp)
+                print("  2captcha error:", resp)
                 return None
-        print("  Timeout menunggu captcha")
         return None
     except Exception as e:
         print("  2captcha error:", e)
+        return None
+
+
+def _solve_capsolver(sitekey, action=None, page_url=f"{GMGN}/?chain=sol", max_wait=180):
+    """Solve reCAPTCHA v2 via Capsolver (fallback provider)."""
+    env = load_env()
+    keys = [env[k] for k in sorted(env.keys())
+            if k.startswith("CAPSOLVER_API_KEY") and env[k]]
+    if not keys:
+        print("  Capsolver key tidak ada di .env — skip")
+        return None
+
+    # pilih key dengan balance > 0
+    import subprocess
+    client_key = None
+    for k in keys:
+        try:
+            out = subprocess.run(["curl", "-s", "--max-time", "8",
+                "-X", "POST", "https://api.capsolver.com/getBalance",
+                "-H", "Content-Type: application/json",
+                "-d", json.dumps({"clientKey": k})],
+                capture_output=True, text=True, timeout=12)
+            d = json.loads(out.stdout)
+            if d.get("balance", 0) > 0:
+                client_key = k
+                print(f"  Capsolver key {k[:12]}... (balance ${d['balance']})")
+                break
+        except Exception:
+            continue
+    if not client_key:
+        print("  Tidak ada Capsolver key dengan saldo — skip")
+        return None
+
+    task = {
+        "type": "ReCaptchaV2TaskProxyLess",
+        "websiteURL": page_url,
+        "websiteKey": sitekey,
+    }
+    try:
+        data = json.dumps({"clientKey": client_key, "task": task}).encode()
+        req = urllib.request.Request("https://api.capsolver.com/createTask", data=data,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            resp = json.loads(r.read().decode())
+        if resp.get("status") != "ready" and resp.get("errorId") != 0:
+            print("  Capsolver createTask error:", resp)
+            return None
+        task_id = resp.get("taskId")
+        if not task_id:
+            return None
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            time.sleep(5)
+            data = json.dumps({"clientKey": client_key, "taskId": task_id}).encode()
+            req = urllib.request.Request("https://api.capsolver.com/getTaskResult", data=data,
+                                         headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                resp = json.loads(r.read().decode())
+            if resp.get("status") == "ready":
+                return resp["solution"]["gRecaptchaResponse"]
+        print("  Capsolver timeout")
+        return None
+    except Exception as e:
+        print("  Capsolver error:", e)
         return None
 
 
