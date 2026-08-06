@@ -60,6 +60,26 @@ Setiap jalan = **1 akun baru** dibuat.
 
 ---
 
+## 🔁 Bikin Banyak Akun Sekaligus
+
+Pakai `batch.sh`:
+
+```bash
+./batch.sh 5              # bikin 5 akun (jeda 30 detik antar akun)
+./batch.sh 10 --wait 60   # bikin 10 akun, jeda 60 detik
+./batch.sh 3 --no-wait    # bikin 3 akun tanpa jeda
+```
+
+Script akan:
+- Cek saldo 2captcha dulu
+- Bikin akun satu per satu dengan jeda (biar gak kentara ke GMGN)
+- Lapor berhasil/gagal di akhir
+
+> ⚠️ **Jangan bikin terlalu banyak sekaligus.** GMGN bisa flag kalau tiba-tiba
+> banyak akun baru dari IP sama. Saran: maksimal 5-10 akun per batch.
+
+---
+
 ## 📁 Struktur Folder
 
 ```
